@@ -68,12 +68,16 @@ export function createPreview(opts: {
   function drawFrame(video: HTMLVideoElement) {
     const cw = canvas.width
     const ch = canvas.height
+    if (video.readyState < 2 || !video.videoWidth) {
+      // Keep last painted frame instead of flashing black between seeks
+      return
+    }
+
     ctx.fillStyle = '#0a0a0c'
     ctx.fillRect(0, 0, cw, ch)
-    if (video.readyState < 2) return
 
-    const vw = video.videoWidth || 16
-    const vh = video.videoHeight || 9
+    const vw = video.videoWidth
+    const vh = video.videoHeight
     const scale = Math.max(cw / vw, ch / vh)
     const dw = vw * scale
     const dh = vh * scale
@@ -81,6 +85,8 @@ export function createPreview(opts: {
     const dy = (ch - dh) / 2
     ctx.drawImage(video, dx, dy, dw, dh)
   }
+
+  let syncing = false
 
   async function ensureReady(el: HTMLVideoElement) {
     if (el.readyState >= 2 && el.videoWidth > 0) return
@@ -90,27 +96,39 @@ export function createPreview(opts: {
         resolve()
       }
       el.addEventListener('loadeddata', done)
-      el.load()
+      if (el.readyState === 0) el.load()
       window.setTimeout(done, 800)
     })
   }
 
   async function syncTo(time: number) {
-    const seg = segmentAtTime(segments, time)
-    if (!seg) return
-    const el = getVideoEl(seg.assetId)
-    if (!el) return
+    if (destroyed || syncing) return
+    syncing = true
+    try {
+      const seg = segmentAtTime(segments, time)
+      if (!seg) return
+      const el = getVideoEl(seg.assetId)
+      if (!el) return
 
-    await ensureReady(el)
+      await ensureReady(el)
 
-    const local = clamp(
-      seg.sourceStart + (time - seg.timelineStart),
-      0,
-      Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity,
-    )
+      const local = clamp(
+        seg.sourceStart + (time - seg.timelineStart),
+        0,
+        Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity,
+      )
 
-    const seekAndDraw = async () => {
-      if (Math.abs(el.currentTime - local) > 0.04) {
+      const needSeek =
+        seg.id !== currentSegId || Math.abs(el.currentTime - local) > 0.22
+
+      if (seg.id !== currentSegId) {
+        currentSegId = seg.id
+        for (const [id, v] of pool) {
+          if (id !== seg.assetId && !v.paused) v.pause()
+        }
+      }
+
+      if (needSeek) {
         await new Promise<void>((resolve) => {
           const done = () => {
             el.removeEventListener('seeked', done)
@@ -122,34 +140,23 @@ export function createPreview(opts: {
           } catch {
             resolve()
           }
-          window.setTimeout(done, 200)
+          window.setTimeout(done, 180)
         })
       }
 
-      // Browsers often won't paint a canvas frame until the video has played
-      if (status !== 'playing') {
+      if (status === 'playing') {
+        if (el.paused) await el.play().catch(() => {})
+      } else {
         try {
           await el.play()
           el.pause()
         } catch {
-          /* autoplay policies */
+          /* ignore */
         }
-      } else {
-        await el.play().catch(() => {})
       }
       drawFrame(el)
-    }
-
-    if (seg.id !== currentSegId) {
-      currentSegId = seg.id
-      for (const [id, v] of pool) {
-        if (id !== seg.assetId && !v.paused) v.pause()
-      }
-      await seekAndDraw()
-    } else if (Math.abs(el.currentTime - local) > 0.25) {
-      await seekAndDraw()
-    } else {
-      drawFrame(el)
+    } finally {
+      syncing = false
     }
   }
 
