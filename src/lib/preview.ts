@@ -13,6 +13,21 @@ export interface PreviewController {
   getStatus: () => PreviewStatus
 }
 
+function waitForEvent(
+  el: HTMLMediaElement,
+  event: string,
+  timeoutMs = 400,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      el.removeEventListener(event, done)
+      resolve()
+    }
+    el.addEventListener(event, done)
+    window.setTimeout(done, timeoutMs)
+  })
+}
+
 /**
  * Canvas-based preview that switches source videos per segment
  * while playing the music track in sync.
@@ -46,14 +61,14 @@ export function createPreview(opts: {
   }
 
   const musicEl = music ? new Audio(music.url) : null
-  if (musicEl) {
-    musicEl.preload = 'auto'
-  }
+  if (musicEl) musicEl.preload = 'auto'
 
   let status: PreviewStatus = 'idle'
   let currentSegId: string | null = null
+  let currentEl: HTMLVideoElement | null = null
   let raf = 0
   let destroyed = false
+  let switching = false
 
   const duration = Math.max(
     compositionDuration(segments),
@@ -66,97 +81,71 @@ export function createPreview(opts: {
   }
 
   function drawFrame(video: HTMLVideoElement) {
+    if (video.readyState < 2 || !video.videoWidth) return
     const cw = canvas.width
     const ch = canvas.height
-    if (video.readyState < 2 || !video.videoWidth) {
-      // Keep last painted frame instead of flashing black between seeks
-      return
-    }
-
     ctx.fillStyle = '#0a0a0c'
     ctx.fillRect(0, 0, cw, ch)
-
     const vw = video.videoWidth
     const vh = video.videoHeight
     const scale = Math.max(cw / vw, ch / vh)
     const dw = vw * scale
     const dh = vh * scale
-    const dx = (cw - dw) / 2
-    const dy = (ch - dh) / 2
-    ctx.drawImage(video, dx, dy, dw, dh)
+    ctx.drawImage(video, (cw - dw) / 2, (ch - dh) / 2, dw, dh)
   }
 
-  let syncing = false
+  async function showSegment(seg: Segment, timelineTime: number) {
+    const el = getVideoEl(seg.assetId)
+    if (!el) return
 
-  async function ensureReady(el: HTMLVideoElement) {
-    if (el.readyState >= 2 && el.videoWidth > 0) return
-    await new Promise<void>((resolve) => {
-      const done = () => {
-        el.removeEventListener('loadeddata', done)
-        resolve()
+    if (el.readyState < 2) {
+      await waitForEvent(el, 'loadeddata', 800)
+    }
+
+    const local = clamp(
+      seg.sourceStart + (timelineTime - seg.timelineStart),
+      0,
+      Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity,
+    )
+
+    if (Math.abs(el.currentTime - local) > 0.05) {
+      const seeked = waitForEvent(el, 'seeked', 250)
+      try {
+        el.currentTime = local
+      } catch {
+        /* ignore */
       }
-      el.addEventListener('loadeddata', done)
-      if (el.readyState === 0) el.load()
-      window.setTimeout(done, 800)
-    })
+      await seeked
+    }
+
+    for (const [id, v] of pool) {
+      if (id !== seg.assetId && !v.paused) v.pause()
+    }
+
+    currentSegId = seg.id
+    currentEl = el
+
+    if (status === 'playing') {
+      await el.play().catch(() => {})
+    } else {
+      try {
+        await el.play()
+        el.pause()
+      } catch {
+        /* ignore */
+      }
+    }
+    drawFrame(el)
   }
 
-  async function syncTo(time: number) {
-    if (destroyed || syncing) return
-    syncing = true
+  async function switchIfNeeded(time: number) {
+    const seg = segmentAtTime(segments, time)
+    if (!seg || seg.id === currentSegId || switching) return
+    switching = true
     try {
-      const seg = segmentAtTime(segments, time)
-      if (!seg) return
-      const el = getVideoEl(seg.assetId)
-      if (!el) return
-
-      await ensureReady(el)
-
-      const local = clamp(
-        seg.sourceStart + (time - seg.timelineStart),
-        0,
-        Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity,
-      )
-
-      const needSeek =
-        seg.id !== currentSegId || Math.abs(el.currentTime - local) > 0.22
-
-      if (seg.id !== currentSegId) {
-        currentSegId = seg.id
-        for (const [id, v] of pool) {
-          if (id !== seg.assetId && !v.paused) v.pause()
-        }
-      }
-
-      if (needSeek) {
-        await new Promise<void>((resolve) => {
-          const done = () => {
-            el.removeEventListener('seeked', done)
-            resolve()
-          }
-          el.addEventListener('seeked', done)
-          try {
-            el.currentTime = local
-          } catch {
-            resolve()
-          }
-          window.setTimeout(done, 180)
-        })
-      }
-
-      if (status === 'playing') {
-        if (el.paused) await el.play().catch(() => {})
-      } else {
-        try {
-          await el.play()
-          el.pause()
-        } catch {
-          /* ignore */
-        }
-      }
-      drawFrame(el)
+      await showSegment(seg, time)
     } finally {
-      syncing = false
+      switching = false
     }
   }
 
@@ -172,7 +161,9 @@ export function createPreview(opts: {
       return
     }
 
-    void syncTo(t)
+    void switchIfNeeded(t)
+    if (currentEl) drawFrame(currentEl)
+
     raf = requestAnimationFrame(tick)
   }
 
@@ -182,9 +173,8 @@ export function createPreview(opts: {
       seek(0)
     }
     setStatus('playing')
-    if (musicEl) {
-      await musicEl.play().catch(() => {})
-    }
+    if (musicEl) await musicEl.play().catch(() => {})
+    if (currentEl) await currentEl.play().catch(() => {})
     cancelAnimationFrame(raf)
     raf = requestAnimationFrame(tick)
   }
@@ -200,7 +190,7 @@ export function createPreview(opts: {
     const t = clamp(time, 0, duration)
     if (musicEl) musicEl.currentTime = t
     currentSegId = null
-    void syncTo(t)
+    void showSegment(segmentAtTime(segments, t) ?? segments[0], t)
     opts.onTime?.(t)
     if (status === 'ended') setStatus('paused')
   }
@@ -218,8 +208,13 @@ export function createPreview(opts: {
     pool.clear()
   }
 
-  // Initial frame
-  if (segments.length) void syncTo(0)
+  // Paint first frame
+  if (segments.length) {
+    void showSegment(segments[0], 0)
+  } else {
+    ctx.fillStyle = '#1a1c22'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+  }
 
   return {
     play,
@@ -295,7 +290,6 @@ export async function exportComposition(opts: {
     recorder.onerror = () => reject(new Error('Export recording failed'))
   })
 
-  // Reuse preview drawing against a disposable controller timeline
   const byId = new Map(opts.videos.map((v) => [v.id, v]))
   const pool = new Map<string, HTMLVideoElement>()
   const ctx = canvas.getContext('2d')!
@@ -341,11 +335,11 @@ export async function exportComposition(opts: {
               /* ignore */
             }
           }
-          ctx.fillStyle = '#000'
-          ctx.fillRect(0, 0, width, height)
-          if (el.readyState >= 2) {
-            const vw = el.videoWidth || 16
-            const vh = el.videoHeight || 9
+          if (el.readyState >= 2 && el.videoWidth) {
+            ctx.fillStyle = '#000'
+            ctx.fillRect(0, 0, width, height)
+            const vw = el.videoWidth
+            const vh = el.videoHeight
             const scale = Math.max(width / vw, height / vh)
             const dw = vw * scale
             const dh = vh * scale
