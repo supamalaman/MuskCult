@@ -70,6 +70,53 @@ export default function App() {
     }
   }, [])
 
+  const loadDemoSamples = useCallback(async () => {
+    setBusy(true)
+    try {
+      const clipUrls = [
+        '/samples/clip-red.mp4',
+        '/samples/clip-cyan.mp4',
+        '/samples/clip-ink.mp4',
+      ]
+      const clipFiles: File[] = []
+      for (const url of clipUrls) {
+        const res = await fetch(url)
+        const blob = await res.blob()
+        const name = url.split('/').pop()!
+        clipFiles.push(new File([blob], name, { type: blob.type || 'video/mp4' }))
+      }
+      const { videos: next } = await loadMediaFiles(clipFiles)
+      setVideos((prev) => {
+        prev.forEach(revokeAsset)
+        return next
+      })
+
+      const musicRes = await fetch('/samples/beat-track.mp3')
+      const musicBlob = await musicRes.blob()
+      const musicFile = new File([musicBlob], 'beat-track.mp3', {
+        type: musicBlob.type || 'audio/mpeg',
+      })
+      const { audios } = await loadMediaFiles([musicFile])
+      if (audios[0]) {
+        setMusic((prev) => {
+          if (prev) revokeAsset(prev)
+          return audios[0]
+        })
+        musicBufferRef.current = await musicFile.arrayBuffer()
+        const detected = await detectBeats(
+          musicBufferRef.current,
+          settings.beatDensity,
+        )
+        setBeats(detected)
+        flash(`Demo loaded · ${next.length} clips · ${detected.length} beats`)
+      }
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Could not load demo samples')
+    } finally {
+      setBusy(false)
+    }
+  }, [settings.beatDensity])
+
   const onAddMusic = useCallback(async (files: File[]) => {
     if (!files[0]) return
     setBusy(true)
@@ -189,6 +236,14 @@ export default function App() {
           Drop footage and a track. We slice on the beat — or scatter it into noise —
           and stitch a music video you can preview and export.
         </p>
+        <button
+          type="button"
+          className="btn btn-secondary hero-demo"
+          disabled={busy}
+          onClick={() => void loadDemoSamples()}
+        >
+          Load demo samples
+        </button>
       </header>
 
       <main className="workspace">
