@@ -1,0 +1,121 @@
+#!/bin/bash
+# Macro.app — Macro Launch entrypoint for macOS
+set -euo pipefail
+
+CONTENTS="$(cd "$(dirname "$0")/.." && pwd)"
+RESOURCES="$CONTENTS/Resources"
+LOG_DIR="${HOME}/Library/Logs/MacroLaunch"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/macro-launch.log"
+
+find_muskcult() {
+  # Pointer written by install-macro-app.sh
+  if [[ -f "$RESOURCES/muskcult-home.txt" ]]; then
+    local pointed
+    pointed="$(tr -d '[:space:]' <"$RESOURCES/muskcult-home.txt")"
+    if [[ -f "$pointed/macro-launch/app.py" ]]; then
+      echo "$pointed"
+      return 0
+    fi
+  fi
+
+  # Optional defaults preference
+  if command -v defaults >/dev/null 2>&1; then
+    local from_defaults
+    from_defaults="$(defaults read com.muskcult.macro-launch MuskCultHome 2>/dev/null || true)"
+    if [[ -n "$from_defaults" && -f "$from_defaults/macro-launch/app.py" ]]; then
+      echo "$from_defaults"
+      return 0
+    fi
+  fi
+
+  local candidates=(
+    "${MUSKCULT_HOME:-}"
+    "$HOME/Documents/Apps/MuskCult"
+    "$HOME/Documents/MuskCult"
+    "$HOME/Developer/MuskCult"
+    "$HOME/src/MuskCult"
+    "$HOME/code/MuskCult"
+    # If Macro.app lives inside the repo at macos/Macro.app
+    "$(cd "$CONTENTS/../../.." 2>/dev/null && pwd)"
+  )
+  local c
+  for c in "${candidates[@]}"; do
+    [[ -z "$c" ]] && continue
+    if [[ -f "$c/macro-launch/app.py" && -f "$c/package.json" ]]; then
+      echo "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+notify() {
+  local title="$1" msg="$2"
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e "display notification \"$msg\" with title \"$title\"" >/dev/null 2>&1 || true
+  fi
+}
+
+alert() {
+  local msg="$1"
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e "display alert \"Macro Launch\" message \"$msg\" as critical" >/dev/null 2>&1 || true
+  fi
+  echo "$msg" >&2
+}
+
+{
+  echo "---- $(date) ----"
+  ROOT="$(find_muskcult)" || {
+    alert "MuskCult not found. Clone it to ~/Documents/Apps/MuskCult (or set MUSKCULT_HOME)."
+    exit 1
+  }
+  echo "MuskCult root: $ROOT"
+
+  # Prefer repo tools.json; fall back to bundled copy
+  if [[ ! -f "$ROOT/macro-launch/tools.json" && -f "$RESOURCES/tools.json" ]]; then
+    mkdir -p "$ROOT/macro-launch"
+    cp "$RESOURCES/tools.json" "$ROOT/macro-launch/tools.json"
+  fi
+
+  # Ensure MuskCult is listed
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$ROOT/macro-launch/tools.json" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+tools = json.loads(path.read_text()) if path.exists() else []
+if not any(t.get("id") == "muskcult" for t in tools):
+    tools.insert(0, {
+        "id": "muskcult",
+        "name": "MuskCult",
+        "blurb": "Cut clips to a track — coherent, random, or hybrid — then export a WebM.",
+        "kind": "muskcult",
+        "target": "http://localhost:5173/",
+    })
+    path.write_text(json.dumps(tools, indent=2) + "\n")
+PY
+  fi
+
+  export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+  cd "$ROOT"
+
+  # Reuse existing Macro Launch server if already up
+  if curl -sf -o /dev/null "http://127.0.0.1:8765/api/health"; then
+    echo "Macro Launch already running"
+  else
+    echo "Starting Macro Launch…"
+    nohup python3 "$ROOT/macro-launch/app.py" >>"$LOG" 2>&1 &
+    for _ in $(seq 1 40); do
+      if curl -sf -o /dev/null "http://127.0.0.1:8765/api/health"; then
+        break
+      fi
+      sleep 0.25
+    done
+  fi
+
+  open "http://127.0.0.1:8765/"
+  notify "Macro Launch" "MuskCult is ready in Macro Launch."
+} >>"$LOG" 2>&1

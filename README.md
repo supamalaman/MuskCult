@@ -9,27 +9,27 @@ npm install
 npm run dev
 ```
 
-Or via **Macro Launch** (tools hub):
+## Macro Launch (`Applications/Macro.app`)
+
+MuskCult is registered in **Macro Launch**. On a Mac:
+
+```bash
+npm install
+bash scripts/install-macro-app.sh
+open /Applications/Macro.app
+```
+
+That installs/updates `/Applications/Macro.app` (or `~/Applications/Macro.app`), links the repo at `~/Documents/Apps/MuskCult`, and opens the Macro Launch hub with **MuskCult** as a one-click tool.
+
+Cross-platform (no `.app` needed):
 
 ```bash
 npm run macro-launch
-# or double-click: Run Macro Launch.command
 ```
 
-One-click MuskCult only:
+Add more tools in `macro-launch/tools.json`.
 
-```bash
-npm run start:muskcult
-```
-
-## Macro Launch
-
-`macro-launch/` is the local launcher for MuskCult (and other tools listed in `macro-launch/tools.json`).
-
-- **MuskCult** is registered and starts the Vite app on port 5173 if needed
-- Edit `tools.json` to add more apps (Four-Panel Image Splitter is pre-listed if installed under `~/Documents/Apps/`)
-
-### Desktop / dock (Linux)
+### Linux desktop / dock
 
 ```bash
 bash scripts/install-launchers.sh

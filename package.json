@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "macro-launch": "python3 macro-launch/app.py",
-    "start:muskcult": "bash scripts/run-muskcult.sh"
+    "start:muskcult": "bash scripts/run-muskcult.sh",
+    "install:macro-app": "bash scripts/install-macro-app.sh"
   },
   "dependencies": {
     "react": "^19.2.8",
