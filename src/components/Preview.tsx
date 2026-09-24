@@ -1,9 +1,11 @@
-import { useEffect, useRef, type MutableRefObject } from 'react'
+import { useEffect, useMemo, useRef, type MutableRefObject } from 'react'
 import type { MediaAsset, Segment } from '../lib/types'
 import type { PreviewStatus } from '../lib/preview'
 import { createPreview, type PreviewController } from '../lib/preview'
 import { Timeline } from './Media'
 import { formatTime } from '../lib/utils'
+
+const PALETTE = ['#ff3b1f', '#0a7ea4', '#12141a', '#e6a817', '#2f9e44', '#7c3aed']
 
 interface PreviewProps {
   segments: Segment[]
@@ -39,6 +41,14 @@ export function PreviewStage({
   controllerRef,
 }: PreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  const assetColors = useMemo(() => {
+    const map: Record<string, string> = {}
+    videos.forEach((v, i) => {
+      map[v.id] = PALETTE[i % PALETTE.length]
+    })
+    return map
+  }, [videos])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -104,7 +114,8 @@ export function PreviewStage({
         duration={duration}
         currentTime={currentTime}
         beats={beats}
-        segmentCount={segments.length}
+        segments={segments}
+        assetColors={assetColors}
         onSeek={(t) => {
           controllerRef.current?.seek(t)
           onSeek(t)

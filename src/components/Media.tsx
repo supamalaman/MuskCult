@@ -109,7 +109,8 @@ interface TimelineProps {
   duration: number
   currentTime: number
   beats: number[]
-  segmentCount: number
+  segments: { timelineStart: number; duration: number; assetId: string }[]
+  assetColors: Record<string, string>
   onSeek: (t: number) => void
 }
 
@@ -117,7 +118,8 @@ export function Timeline({
   duration,
   currentTime,
   beats,
-  segmentCount,
+  segments,
+  assetColors,
   onSeek,
 }: TimelineProps) {
   const ref = useRef<HTMLDivElement>(null)
@@ -168,7 +170,7 @@ export function Timeline({
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
         <span>
-          {segmentCount} cuts · {beats.length} beats
+          {segments.length} cuts · {beats.length} beats
         </span>
       </div>
       <div
@@ -184,6 +186,19 @@ export function Timeline({
           if (e.key === 'ArrowRight') onSeek(Math.min(duration, currentTime + 0.5))
         }}
       >
+        <div className="timeline-segments" aria-hidden>
+          {segments.map((s) => (
+            <span
+              key={`${s.assetId}-${s.timelineStart}`}
+              className="timeline-seg"
+              style={{
+                left: `${duration ? (s.timelineStart / duration) * 100 : 0}%`,
+                width: `${duration ? (s.duration / duration) * 100 : 0}%`,
+                background: assetColors[s.assetId] ?? 'rgba(18,20,26,0.25)',
+              }}
+            />
+          ))}
+        </div>
         <div className="timeline-beats" aria-hidden>
           {beats.map((b) => (
             <span

@@ -82,36 +82,75 @@ export function createPreview(opts: {
     ctx.drawImage(video, dx, dy, dw, dh)
   }
 
+  async function ensureReady(el: HTMLVideoElement) {
+    if (el.readyState >= 2 && el.videoWidth > 0) return
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        el.removeEventListener('loadeddata', done)
+        resolve()
+      }
+      el.addEventListener('loadeddata', done)
+      el.load()
+      window.setTimeout(done, 800)
+    })
+  }
+
   async function syncTo(time: number) {
     const seg = segmentAtTime(segments, time)
     if (!seg) return
     const el = getVideoEl(seg.assetId)
     if (!el) return
 
-    const local = clamp(seg.sourceStart + (time - seg.timelineStart), 0, el.duration || Infinity)
+    await ensureReady(el)
+
+    const local = clamp(
+      seg.sourceStart + (time - seg.timelineStart),
+      0,
+      Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity,
+    )
+
+    const seekAndDraw = async () => {
+      if (Math.abs(el.currentTime - local) > 0.04) {
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            el.removeEventListener('seeked', done)
+            resolve()
+          }
+          el.addEventListener('seeked', done)
+          try {
+            el.currentTime = local
+          } catch {
+            resolve()
+          }
+          window.setTimeout(done, 200)
+        })
+      }
+
+      // Browsers often won't paint a canvas frame until the video has played
+      if (status !== 'playing') {
+        try {
+          await el.play()
+          el.pause()
+        } catch {
+          /* autoplay policies */
+        }
+      } else {
+        await el.play().catch(() => {})
+      }
+      drawFrame(el)
+    }
 
     if (seg.id !== currentSegId) {
       currentSegId = seg.id
-      try {
-        el.currentTime = local
-        if (status === 'playing') await el.play().catch(() => {})
-      } catch {
-        /* seek abort */
+      for (const [id, v] of pool) {
+        if (id !== seg.assetId && !v.paused) v.pause()
       }
+      await seekAndDraw()
     } else if (Math.abs(el.currentTime - local) > 0.25) {
-      try {
-        el.currentTime = local
-      } catch {
-        /* ignore */
-      }
+      await seekAndDraw()
+    } else {
+      drawFrame(el)
     }
-
-    // Pause other pool videos
-    for (const [id, v] of pool) {
-      if (id !== seg.assetId && !v.paused) v.pause()
-    }
-
-    drawFrame(el)
   }
 
   function tick() {

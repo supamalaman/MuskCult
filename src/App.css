@@ -481,6 +481,19 @@
   overflow: hidden;
 }
 
+.timeline-segments {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+.timeline-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  opacity: 0.55;
+}
+
 .timeline-beats {
   position: absolute;
   inset: 0;
