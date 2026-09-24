@@ -40,7 +40,7 @@ export function PreviewStage({
   onExport,
   controllerRef,
 }: PreviewProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
 
   const assetColors = useMemo(() => {
     const map: Record<string, string> = {}
@@ -51,23 +51,20 @@ export function PreviewStage({
   }, [videos])
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const videoEl = videoRef.current
+    if (!videoEl) return
 
     controllerRef.current?.destroy()
     controllerRef.current = null
 
     if (!segments.length) {
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
-        ctx.fillStyle = '#1a1c22'
-        ctx.fillRect(0, 0, canvas.width, canvas.height)
-      }
+      videoEl.removeAttribute('src')
+      videoEl.load()
       return
     }
 
     const controller = createPreview({
-      canvas,
+      videoEl,
       segments,
       videos,
       music,
@@ -96,11 +93,11 @@ export function PreviewStage({
       </header>
 
       <div className="stage">
-        <canvas
-          ref={canvasRef}
-          width={1280}
-          height={720}
-          className="stage-canvas"
+        <video
+          ref={videoRef}
+          className="stage-video"
+          muted
+          playsInline
           aria-label="Video preview"
         />
         {!segments.length && (

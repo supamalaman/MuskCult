@@ -29,43 +29,25 @@ function waitForEvent(
 }
 
 /**
- * Canvas-based preview that switches source videos per segment
- * while playing the music track in sync.
+ * Preview that swaps a visible <video> element per timeline segment
+ * while the music track drives time.
  */
 export function createPreview(opts: {
-  canvas: HTMLCanvasElement
+  videoEl: HTMLVideoElement
   segments: Segment[]
   videos: MediaAsset[]
   music: MediaAsset | null
   onTime?: (t: number) => void
   onStatus?: (s: PreviewStatus) => void
 }): PreviewController {
-  const { canvas, segments, videos, music } = opts
-  const ctx = canvas.getContext('2d')!
+  const { videoEl, segments, videos, music } = opts
   const byId = new Map(videos.map((v) => [v.id, v]))
-
-  const pool = new Map<string, HTMLVideoElement>()
-  function getVideoEl(assetId: string): HTMLVideoElement | null {
-    const asset = byId.get(assetId)
-    if (!asset) return null
-    let el = pool.get(assetId)
-    if (!el) {
-      el = document.createElement('video')
-      el.src = asset.url
-      el.muted = true
-      el.playsInline = true
-      el.preload = 'auto'
-      pool.set(assetId, el)
-    }
-    return el
-  }
 
   const musicEl = music ? new Audio(music.url) : null
   if (musicEl) musicEl.preload = 'auto'
 
   let status: PreviewStatus = 'idle'
   let currentSegId: string | null = null
-  let currentEl: HTMLVideoElement | null = null
   let raf = 0
   let destroyed = false
   let switching = false
@@ -80,70 +62,55 @@ export function createPreview(opts: {
     opts.onStatus?.(s)
   }
 
-  function drawFrame(video: HTMLVideoElement) {
-    if (video.readyState < 2 || !video.videoWidth) return
-    const cw = canvas.width
-    const ch = canvas.height
-    ctx.fillStyle = '#0a0a0c'
-    ctx.fillRect(0, 0, cw, ch)
-    const vw = video.videoWidth
-    const vh = video.videoHeight
-    const scale = Math.max(cw / vw, ch / vh)
-    const dw = vw * scale
-    const dh = vh * scale
-    ctx.drawImage(video, (cw - dw) / 2, (ch - dh) / 2, dw, dh)
-  }
-
   async function showSegment(seg: Segment, timelineTime: number) {
-    const el = getVideoEl(seg.assetId)
-    if (!el) return
+    const asset = byId.get(seg.assetId)
+    if (!asset) return
 
-    if (el.readyState < 2) {
-      await waitForEvent(el, 'loadeddata', 800)
+    if (videoEl.src !== asset.url) {
+      videoEl.src = asset.url
+      videoEl.load()
+      await waitForEvent(videoEl, 'loadeddata', 900)
     }
 
     const local = clamp(
       seg.sourceStart + (timelineTime - seg.timelineStart),
       0,
-      Number.isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity,
+      Number.isFinite(videoEl.duration) && videoEl.duration > 0
+        ? videoEl.duration
+        : Infinity,
     )
 
-    if (Math.abs(el.currentTime - local) > 0.05) {
-      const seeked = waitForEvent(el, 'seeked', 250)
+    if (Math.abs(videoEl.currentTime - local) > 0.05) {
+      const seeked = waitForEvent(videoEl, 'seeked', 280)
       try {
-        el.currentTime = local
+        videoEl.currentTime = local
       } catch {
         /* ignore */
       }
       await seeked
     }
 
-    for (const [id, v] of pool) {
-      if (id !== seg.assetId && !v.paused) v.pause()
-    }
-
     currentSegId = seg.id
-    currentEl = el
+    videoEl.muted = true
 
     if (status === 'playing') {
-      await el.play().catch(() => {})
+      await videoEl.play().catch(() => {})
     } else {
-      try {
-        await el.play()
-        el.pause()
-      } catch {
-        /* ignore */
-      }
+      videoEl.pause()
     }
-    drawFrame(el)
   }
 
   async function switchIfNeeded(time: number) {
-    const seg = segmentAtTime(segments, time)
-    if (!seg || seg.id === currentSegId || switching) return
+    if (switching) return
     switching = true
     try {
-      await showSegment(seg, time)
+      let guard = 0
+      while (guard++ < 6) {
+        const now = musicEl?.currentTime ?? time
+        const seg = segmentAtTime(segments, now)
+        if (!seg || seg.id === currentSegId) break
+        await showSegment(seg, now)
+      }
     } finally {
       switching = false
     }
@@ -162,19 +129,15 @@ export function createPreview(opts: {
     }
 
     void switchIfNeeded(t)
-    if (currentEl) drawFrame(currentEl)
-
     raf = requestAnimationFrame(tick)
   }
 
   async function play() {
     if (!segments.length) return
-    if (status === 'ended') {
-      seek(0)
-    }
+    if (status === 'ended') seek(0)
     setStatus('playing')
     if (musicEl) await musicEl.play().catch(() => {})
-    if (currentEl) await currentEl.play().catch(() => {})
+    await videoEl.play().catch(() => {})
     cancelAnimationFrame(raf)
     raf = requestAnimationFrame(tick)
   }
@@ -182,7 +145,7 @@ export function createPreview(opts: {
   function pause() {
     cancelAnimationFrame(raf)
     musicEl?.pause()
-    for (const v of pool.values()) v.pause()
+    videoEl.pause()
     if (status === 'playing') setStatus('paused')
   }
 
@@ -190,7 +153,8 @@ export function createPreview(opts: {
     const t = clamp(time, 0, duration)
     if (musicEl) musicEl.currentTime = t
     currentSegId = null
-    void showSegment(segmentAtTime(segments, t) ?? segments[0], t)
+    const seg = segmentAtTime(segments, t) ?? segments[0]
+    if (seg) void showSegment(seg, t)
     opts.onTime?.(t)
     if (status === 'ended') setStatus('paused')
   }
@@ -200,20 +164,12 @@ export function createPreview(opts: {
     pause()
     setStatus('idle')
     musicEl?.removeAttribute('src')
-    for (const v of pool.values()) {
-      v.pause()
-      v.removeAttribute('src')
-      v.load()
-    }
-    pool.clear()
+    videoEl.removeAttribute('src')
+    videoEl.load()
   }
 
-  // Paint first frame
   if (segments.length) {
     void showSegment(segments[0], 0)
-  } else {
-    ctx.fillStyle = '#1a1c22'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
   }
 
   return {
