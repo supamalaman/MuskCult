@@ -1,0 +1,17 @@
+[
+  {
+    "id": "muskcult",
+    "name": "MuskCult",
+    "blurb": "Cut clips to a track — coherent, random, or hybrid — then export a WebM.",
+    "kind": "muskcult",
+    "target": "http://localhost:5173/"
+  },
+  {
+    "id": "four-panel",
+    "name": "Four-Panel Image Splitter",
+    "blurb": "Split or combine images into panel grids (if installed under Documents/Apps).",
+    "kind": "command",
+    "target": "python3 app.py",
+    "cwd": "~/Documents/Apps/Four-Panel Image Splitter"
+  }
+]
